@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Threading.Tasks;
-
 using Discord;
 using Discord.Webhook;
 
@@ -19,20 +18,21 @@ public class DiscordWebhook
     /// <summary>
     /// Init with webhook from env var
     /// </summary>
-    public DiscordWebhook(string? url)
+    public DiscordWebhook()
     {
+        var url = Environment.GetEnvironmentVariable("DISCORD_WEBHOOK");
         if (string.IsNullOrEmpty(url))
             return;
-
+        
         this.Client = new DiscordWebhookClient(url);
     }
 
-    private static DateTime GetPacificStandardTime()
+    private static DateTime GetChinaStandardTime()
     {
         var utc = DateTime.UtcNow;
-        var pacificZone = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
-        var pacificTime = TimeZoneInfo.ConvertTimeFromUtc(utc, pacificZone);
-        return pacificTime;
+        var chinaStandardZone = TimeZoneInfo.FindSystemTimeZoneById("Asia/Shanghai");
+        var chinaStandardTime = TimeZoneInfo.ConvertTimeFromUtc(utc, chinaStandardZone);
+        return chinaStandardTime;
     }
 
     /// <summary>
@@ -46,7 +46,11 @@ public class DiscordWebhook
     {
         if (this.Client == null)
             throw new Exception("Webhooks not set up");
-
+        
+        if (message.Length > 4000)
+        {
+            message = message.Substring(0, 4000);
+        }
         var embed = new EmbedBuilder()
             .WithColor(color)
             .WithTitle(title)
@@ -54,13 +58,13 @@ public class DiscordWebhook
             .WithDescription(message)
             .Build();
 
-        var time = GetPacificStandardTime();
-        var username = "Plo";
-        var avatarUrl = "https://goatcorp.github.io/icons/plo.png";
+        var time = GetChinaStandardTime();
+        var username = "Odder";
+        var avatarUrl = "https://ottercorp.github.io/icons/odder.png";
         if (time.Hour is > 20 or < 7)
         {
-            username = "Gon";
-            avatarUrl = "https://goatcorp.github.io/icons/gon.png";
+            username = "Otter";
+            avatarUrl = "https://ottercorp.github.io/icons/otter.png";
         }
 
         return await this.Client.SendMessageAsync(embeds: new[] { embed }, username: username, avatarUrl: avatarUrl);

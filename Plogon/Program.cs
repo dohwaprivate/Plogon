@@ -1,39 +1,36 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
-
-using Amazon.S3;
-
 using Discord;
-
-using Octokit;
-
 using Serilog;
 
 namespace Plogon;
 
 class Program
 {
+    private static readonly string[] AlwaysBuildUsers = new[] { "Bluefissure", "MapleRecall", "Loskh", "wozaiha", "subjadeites", "KangDohwa" };
+
     private enum ModeOfOperation
     {
         /// <summary>
         /// No mode set.
         /// </summary>
         Unknown,
-
+        
         /// <summary>
         /// We are building a plugin for someone in a Pull Request.
         /// </summary>
         PullRequest,
-
+        
         /// <summary>
         /// We are building pending plugins to submit them to the repo.
         /// </summary>
         Commit,
-
+        
         /// <summary>
         /// We are running a continuous verification build for Dalamud.
         /// </summary>
@@ -60,19 +57,7 @@ class Program
         if (mode == ModeOfOperation.Unknown)
             throw new Exception("No mode of operation specified.");
 
-        var s3AccessKey = Environment.GetEnvironmentVariable("PLOGON_S3_ACCESSKEY");
-        var s3Secret = Environment.GetEnvironmentVariable("PLOGON_S3_SECRET");
-        var s3Region = Environment.GetEnvironmentVariable("PLOGON_S3_REGION");
-
-        IAmazonS3? s3Client = null;
-        if (s3AccessKey != null && s3Secret != null && s3Region != null)
-        {
-            var s3Creds = new Amazon.Runtime.BasicAWSCredentials(s3AccessKey, s3Secret);
-            s3Client = new AmazonS3Client(s3Creds, Amazon.RegionEndpoint.GetBySystemName(s3Region));
-        }
-
-        var publicChannelWebhook = new DiscordWebhook(Environment.GetEnvironmentVariable("DISCORD_WEBHOOK"));
-        var pacChannelWebhook = new DiscordWebhook(Environment.GetEnvironmentVariable("PAC_DISCORD_WEBHOOK"));
+        var webhook = new DiscordWebhook();
         var webservices = new WebServices();
 
         var githubSummary = "## Build Summary\n";
@@ -83,7 +68,7 @@ class Program
         var repoOwner = repoParts?[0];
         var repoName = repoParts?[1];
         var prNumber = Environment.GetEnvironmentVariable("GITHUB_PR_NUM");
-
+        
         if (mode == ModeOfOperation.PullRequest && string.IsNullOrEmpty(prNumber))
             throw new Exception("PR number not set");
 
@@ -105,8 +90,13 @@ class Program
         }
 
         var secretsPk = Environment.GetEnvironmentVariable("PLOGON_SECRETS_PK");
-        var secretsPkBytes = string.IsNullOrEmpty(secretsPk) ? null : System.Text.Encoding.ASCII.GetBytes(secretsPk);
+        if (string.IsNullOrEmpty(secretsPk))
+            throw new Exception("No secrets private key");
+        var secretsPkBytes = System.Text.Encoding.ASCII.GetBytes(secretsPk);
+
         var secretsPkPassword = Environment.GetEnvironmentVariable("PLOGON_SECRETS_PK_PASSWORD");
+        if (string.IsNullOrEmpty(secretsPkPassword))
+            throw new Exception("No secrets private key password");
 
         var aborted = false;
         var numFailed = 0;
@@ -145,7 +135,6 @@ class Program
                 PrDiff = prDiff,
                 AllowNonDefaultImages = mode != ModeOfOperation.Continuous, // HACK, fix it
                 CutoffDate = null,
-                S3Client = s3Client,
             };
 
             // HACK, we don't know the API level a plugin is for before building it...
@@ -156,7 +145,7 @@ class Program
                 // API8 release
                 setup.CutoffDate = new DateTime(2023, 06, 10);
             }
-
+            
             var buildProcessor = new BuildProcessor(setup);
             var tasks = buildProcessor.GetBuildTasks(mode == ModeOfOperation.Continuous);
 
@@ -261,7 +250,7 @@ class Program
                         GitHubOutputBuilder.StartGroup($"Build {task.InternalName}[{task.Channel}] ({task.Manifest!.Plugin!.Commit})");
 
                         if (!buildAll && (task.Manifest.Plugin.Owners.All(x => x != actor) &&
-                                          PlogonSystemDefine.PacMembers.All(x => x != actor)))
+                                          AlwaysBuildUsers.All(x => x != actor)))
                         {
                             Log.Information("Not owned: {Name} - {Sha} (have {HaveCommit})", task.InternalName,
                                 task.Manifest.Plugin.Commit,
@@ -358,17 +347,17 @@ class Program
                                     prInt = commitPrNum;
                                 }
 
-                                await webservices.StagePluginBuild(new WebServices.StagedPluginInfo
-                                {
-                                    InternalName = task.InternalName,
-                                    Version = status.Version!,
-                                    Dip17Track = task.Channel,
-                                    PrNumber = prInt,
-                                    Changelog = changelog,
-                                    IsInitialRelease = task.IsNewPlugin,
-                                    DiffLinesAdded = status.DiffLinesAdded,
-                                    DiffLinesRemoved = status.DiffLinesRemoved,
-                                });
+                                // await webservices.StagePluginBuild(new WebServices.StagedPluginInfo
+                                // {
+                                //     InternalName = task.InternalName,
+                                //     Version = status.Version!,
+                                //     Dip17Track = task.Channel,
+                                //     PrNumber = prInt,
+                                //     Changelog = changelog,
+                                //     IsInitialRelease = task.IsNewPlugin,
+                                //     DiffLinesAdded = status.DiffLinesAdded,
+                                //     DiffLinesRemoved = status.DiffLinesRemoved,
+                                // });
                             }
                         }
                         else
@@ -401,16 +390,6 @@ class Program
                         numNoIcon++;
 
                         prLabels |= GitHubApi.PrLabel.NeedIcon;
-                    }
-                    catch (BuildProcessor.ApiLevelException api)
-                    {
-                        Log.Error("Bad API level!");
-                        buildsMd.AddRow("🚦", $"{task.InternalName} [{task.Channel}]", fancyCommit,
-                            $"Wrong API level! (have: {api.Have}, need: {api.Want})");
-                        numFailed++;
-                        numNoIcon++;
-
-                        prLabels |= GitHubApi.PrLabel.VersionConflict;
                     }
                     catch (Exception ex)
                     {
@@ -450,20 +429,16 @@ class Program
                     var alreadyPosted = existingMessages.Length > 0;
 
                     var links =
-                        $"[Show log](https://github.com/dohwaprivate/DalamudPluginsD17/actions/runs/{actionRunId}) - [Review](https://github.com/dohwaprivate/DalamudPluginsD17/pull/{prNumber}/files#submit-review)";
+                        $"[Show log](https://github.com/ottercorp/DalamudPluginsD17/actions/runs/{actionRunId}) - [Review](https://github.com/ottercorp/DalamudPluginsD17/pull/{prNumber}/files#submit-review)";
 
                     var commentText = anyFailed ? "Builds failed, please check action output." : "All builds OK!";
-
-                    // API9
-                    commentText = "**Take care!** Please test your plugins in-game before submitting them here to prevent crashes and instability. We really appreciate it!\n\n";
-
                     if (!anyTried)
                         commentText =
                             "⚠️ No builds attempted! This probably means that your owners property is misconfigured.";
 
-                    var parsedPrNum = int.Parse(prNumber!);
+                    var prNum = int.Parse(prNumber!);
 
-                    var crossOutTask = gitHubApi?.CrossOutAllOfMyComments(parsedPrNum);
+                    var crossOutTask = gitHubApi?.CrossOutAllOfMyComments(prNum);
 
                     var anyComments = true;
                     if (crossOutTask != null)
@@ -484,7 +459,7 @@ class Program
                             $"\nThe average merge time for plugin updates is currently {timeText}.";
                     }
 
-                    var commentTask = gitHubApi?.AddComment(parsedPrNum,
+                    var commentTask = gitHubApi?.AddComment(prNum,
                         commentText + mergeTimeText + "\n\n" + buildsMd + "\n##### " + links);
 
                     if (commentTask != null)
@@ -497,7 +472,7 @@ class Program
                     {
                         hookTitle += " created";
 
-                        var prDesc = await gitHubApi!.GetIssueBody(parsedPrNum);
+                        var prDesc = await gitHubApi!.GetIssueBody(prNum);
                         if (!string.IsNullOrEmpty(prDesc))
                             buildInfo += $"```\n{prDesc}\n```\n";
                     }
@@ -517,28 +492,21 @@ class Program
                             $": {nameTask.InternalName} [{nameTask.Channel}]{(numBuildTasks > 1 ? $" (+{numBuildTasks - 1})" : string.Empty)}";
 
                     var ok = !anyFailed && anyTried;
-                    var id = await publicChannelWebhook.Send(ok ? Color.Purple : Color.Red,
-                        $"{buildInfo}\n\n{links} - [PR](https://github.com/dohwaprivate/DalamudPluginsD17/pull/{prNumber})",
+                    var id = await webhook.Send(ok ? Color.Purple : Color.Red,
+                        $"{buildInfo}\n\n{links} - [PR](https://github.com/ottercorp/DalamudPluginsD17/pull/{prNumber})",
                         hookTitle, ok ? "Accepted" : "Rejected");
                     await webservices.RegisterMessageId(prNumber!, id);
 
                     if (gitHubApi != null)
-                        await gitHubApi.SetPrLabels(parsedPrNum, prLabels);
-
-                    if (prLabels.HasFlag(GitHubApi.PrLabel.NewPlugin) && gitHubApi != null)
-                    {
-                        await DoPacRoundRobinAssign(gitHubApi, parsedPrNum);
-                    }
+                        await gitHubApi.SetPrLabels(prNum, prLabels);
                 }
 
-                if (repoName != null && mode == ModeOfOperation.Commit && anyTried && publicChannelWebhook.Client != null)
+                if (repoName != null && mode == ModeOfOperation.Commit && anyTried && webhook.Client != null)
                 {
-                    var committedText =
-                        $"{ReplaceDiscordEmotes(buildsMd.GetText(true, true))}\n\n[Show log](https://github.com/dohwaprivate/DalamudPluginsD17/actions/runs/{actionRunId})";
-                    var committedColor = !anyFailed ? Color.Green : Color.Red;
-                    var committedTitle = "Builds committed";
-                    await publicChannelWebhook.Send(committedColor, committedText, committedTitle, string.Empty);
-                    await pacChannelWebhook.Send(committedColor, committedText, committedTitle, string.Empty);
+                    await webhook.Send(!anyFailed ? Color.Green : Color.Red,
+                        $"{ReplaceDiscordEmotes(buildsMd.GetText(true, true))}\n\n[Show log](https://github.com/ottercorp/DalamudPluginsD17/actions/runs/{actionRunId})",
+                        "Builds committed", string.Empty);
+
 
                     // TODO: We don't support this for removals for now
                     foreach (var buildResult in statuses.Where(x => x.Task.Type == BuildTask.TaskType.Build))
@@ -554,14 +522,13 @@ class Program
                                 buildResult.Version);
                             continue;
                         }
-
                         try
                         {
                             var msgIds = await webservices.GetMessageIds(resultPrNum);
 
                             foreach (var id in msgIds)
                             {
-                                await publicChannelWebhook.Client.ModifyMessageAsync(ulong.Parse(id), properties =>
+                                await webhook.Client.ModifyMessageAsync(ulong.Parse(id), properties =>
                                 {
                                     var embed = properties.Embeds.Value.First();
                                     var newEmbed = new EmbedBuilder()
@@ -623,63 +590,6 @@ class Program
 
             if (aborted || anyFailed) Environment.Exit(1);
         }
-    }
-
-    private static async Task DoPacRoundRobinAssign(GitHubApi gitHubApi, int prNumber)
-    {
-        var thisPr = await gitHubApi.GetPullRequest(prNumber);
-
-        if (thisPr == null)
-        {
-            Log.Error("Could not get PR for round robin assign");
-            return;
-        }
-        
-        // Only go on if we don't have an assignee
-        if (thisPr.Assignees.Any())
-            return;
-
-        string? loginToAssign;
-        
-        // Find the last new plugin PR
-        //var prs = await gitHubApi.Client.PullRequest.GetAllForRepository(gitHubApi.RepoOwner, gitHubApi.RepoName);
-        var result = await gitHubApi.Client.Search.SearchIssues(
-                      new SearchIssuesRequest
-                      {
-                          Repos = new RepositoryCollection()
-                          {
-                              { gitHubApi.RepoOwner, gitHubApi.RepoName },
-                          },
-                          Is = new [] { IssueIsQualifier.PullRequest },
-                          Labels = new []{ PlogonSystemDefine.PR_LABEL_NEW_PLUGIN },
-                          SortField = IssueSearchSort.Created,
-                      });
-        var lastNewPluginPr = result?.Items.FirstOrDefault(x => x.Number != prNumber);
-        if (lastNewPluginPr == null)
-        {
-            Log.Error("Could not find last new plugin PR for round robin assign");
-            loginToAssign = PlogonSystemDefine.PacMembers[0];
-        }
-        else
-        {
-            // Find the last assignee
-            var lastAssignee = lastNewPluginPr.Assignees.FirstOrDefault()?.Login;
-            if (lastAssignee == null)
-                loginToAssign = PlogonSystemDefine.PacMembers[0];
-            else
-            {
-                var lastAssigneeIndex = Array.IndexOf(PlogonSystemDefine.PacMembers, lastAssignee);
-                if (lastAssigneeIndex == -1)
-                    loginToAssign = PlogonSystemDefine.PacMembers[0];
-                else
-                {
-                    var nextAssigneeIndex = (lastAssigneeIndex + 1) % PlogonSystemDefine.PacMembers.Length;
-                    loginToAssign = PlogonSystemDefine.PacMembers[nextAssigneeIndex];
-                }
-            }
-        }
-        
-        await gitHubApi.Assign(prNumber, loginToAssign);
     }
 
     private static void SetupLogging()
