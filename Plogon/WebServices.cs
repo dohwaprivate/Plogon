@@ -33,7 +33,7 @@ public class WebServices
     {
         using var client = new HttpClient();
         var result = await client.PostAsync(
-            $"http://xivpf.xyz:8080/Plogon/RegisterMessageId?key={this.key}&prNumber={prNumber}&messageId={messageId}",
+            $"https://xlwebservices-fastapi.onrender.com/Plogon/RegisterMessageId?key={this.key}&prNumber={prNumber}&messageId={messageId}",
             null);
         result.EnsureSuccessStatusCode();
     }
@@ -47,7 +47,7 @@ public class WebServices
     {
         using var client = new HttpClient();
         var result = await client.GetAsync(
-            $"http://xivpf.xyz:8080/Plogon/GetMessageIds?prNumber={prNumber}");
+            $"https://xlwebservices-fastapi.onrender.com/Plogon/GetMessageIds?prNumber={prNumber}");
         result.EnsureSuccessStatusCode();
 
         return await result.Content.ReadFromJsonAsync<string[]>() ?? Array.Empty<string>();
@@ -63,7 +63,7 @@ public class WebServices
     {
         using var client = new HttpClient();
         var result = await client.PostAsync(
-            $"http://xivpf.xyz:8080/Plogon/RegisterVersionPrNumber?key={this.key}&prNumber={prNumber}&internalName={internalName}&version={version}",
+            $"https://xlwebservices-fastapi.onrender.com/Plogon/RegisterVersionPrNumber?key={this.key}&prNumber={prNumber}&internalName={internalName}&version={version}",
             null);
         
         Log.Information(await result.Content.ReadAsStringAsync());
@@ -80,7 +80,7 @@ public class WebServices
     {
         using var client = new HttpClient();
         var result = await client.GetAsync(
-            $"http://xivpf.xyz:8080/Plogon/GetVersionChangelog?internalName={internalName}&version={version}");
+            $"https://xlwebservices-fastapi.onrender.com/Plogon/GetVersionChangelog?internalName={internalName}&version={version}");
 
         if (result.StatusCode == HttpStatusCode.NotFound)
             return null;
