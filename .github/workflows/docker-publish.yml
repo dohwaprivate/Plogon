@@ -6,9 +6,11 @@ name: Docker Publish
 # documentation.
 
 on:
-  release:
-    types:
-      - created
+    push:
+        branches: [main]
+  # release:
+    # types:
+      # - created
 
 env:
   # Use docker.io for Docker Hub if empty
